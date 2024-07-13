@@ -1,6 +1,10 @@
+const fs = require('fs'); 
+
 async function simulateBattle(playerParty, enemyParty) {
     const battleLog = [];
     let currentRound = 1;
+    // Clear battle logs before starting new battle
+    clearBattleLog('battle.log')
 
     // Initialize character stats for battle
     playerParty = initializeCharactersForBattle(playerParty, true);
@@ -8,19 +12,17 @@ async function simulateBattle(playerParty, enemyParty) {
 
     while (!isBattleOver(playerParty, enemyParty)) {
         battleLog.push(`Round ${currentRound}:`);
-
         // Determine turn order based on speed
         const allCharacters = [...playerParty, ...enemyParty].sort((a, b) => b.battleStats.spd - a.battleStats.spd);
-
         for (const attacker of allCharacters) {
             if (attacker.battleStats.hp <= 0) continue; // Skip defeated characters
 
             const defenderParty = attacker.isPlayer ? enemyParty : playerParty;
-            const attackType = selectAttackType(attacker, defenderParty);
-            const targets = selectTargets(attacker, attackType, defenderParty);
+            const attackType = selectAttackType(attacker, defenderParty, playerParty, enemyParty);
+            const targets = selectTargets(attacker, attackType, defenderParty, playerParty, enemyParty);
 
             for (const defender of targets) {
-                const damage = calculateDamage(attacker, defender, attackType, defenderParty);
+                const damage = calculateDamage(attacker, defender, attackType, defenderParty, playerParty, enemyParty);
                 defender.battleStats.hp -= damage;
                 battleLog.push(`${attacker.name} uses ${attackType} on ${defender.name} for ${damage} damage.`);
 
@@ -31,6 +33,9 @@ async function simulateBattle(playerParty, enemyParty) {
         }
 
         currentRound++;
+
+        // Export logs after each round
+        exportBattleLog(battleLog, 'battle.log');
     }
 
     const result = determineWinner(playerParty, enemyParty);
@@ -38,6 +43,14 @@ async function simulateBattle(playerParty, enemyParty) {
     return { log: battleLog, result };
 }
 
+function exportBattleLog(log, filename) {
+    const logString = log.join('\n'); // Convert the log array to a string
+    fs.appendFileSync(filename, logString + '\n'); // Append to the log file
+}
+
+function clearBattleLog(filename) {
+    fs.writeFileSync(filename, ''); // Overwrite the file with an empty string
+}
 
 
 function initializeCharactersForBattle(party, isPlayerParty) {
@@ -47,7 +60,11 @@ function initializeCharactersForBattle(party, isPlayerParty) {
         }[char.rarity];
 
         return {
-            ...char,
+            class: char.class,
+            name: char.name,
+            heart: char.heart,
+            level: char.level,
+            rarity: char.rarity,
             battleStats: {
                 spd: Math.round(char.baseStats.spd * char.level * rarityMultiplier),
                 pAtk: Math.round(char.baseStats.pAtk * char.level * rarityMultiplier),
@@ -66,7 +83,7 @@ function initializeCharactersForBattle(party, isPlayerParty) {
 
 
 
-function selectAttackType(attacker, defenderParty) {
+function selectAttackType(attacker, defenderParty, playerParty, enemyParty) {
     const attackOptions = [];
     const attackWeights = [];
 
@@ -115,6 +132,8 @@ function selectAttackType(attacker, defenderParty) {
     // Randomly select an attack type based on weights
     const totalWeight = attackWeights.reduce((sum, weight) => sum + weight, 0);
     const randomIndex = Math.floor(Math.random() * totalWeight);
+
+
     let weightSum = 0;
     for (let i = 0; i < attackOptions.length; i++) {
         weightSum += attackWeights[i];
@@ -125,31 +144,40 @@ function selectAttackType(attacker, defenderParty) {
 }
 
 
-function selectTargets(attacker, attackType, defenderParty) {
-    if (attackType.includes('Solo')) {
-        // Randomly select one target
-        const randomIndex = Math.floor(Math.random() * defenderParty.length);
-        return [defenderParty[randomIndex]];
+function selectTargets(attacker, attackType, defenderParty, playerParty, enemyParty) {
+    if (attackType.includes('Heal')) {
+      // Filter allies based on HP thresholds (25% for Solo, 50% for Spread)
+      const hpThreshold = attackType === 'Heal Solo' ? 0.25 : 0.5;
+      const eligibleAllies = attacker.isPlayer
+        ? playerParty.filter(char => char.battleStats.hp <= hpThreshold * char.battleStats.maxHp && char.battleStats.hp > 0)
+        : enemyParty.filter(char => char.battleStats.hp <= hpThreshold * char.battleStats.maxHp && char.battleStats.hp > 0);
+  
+      if (attackType === 'Heal Solo') {
+        // Randomly select one eligible ally
+        const randomIndex = Math.floor(Math.random() * eligibleAllies.length);
+        return [eligibleAllies[randomIndex]];
+      } else {
+        // Heal Spread - return all eligible allies
+        return eligibleAllies;
+      }
+    } else if (attackType.includes('Solo')) {
+      // Randomly select one target from the defender party
+      const randomIndex = Math.floor(Math.random() * defenderParty.length);
+      return [defenderParty[randomIndex]];
     } else if (attackType.includes('Spread')) {
-        // Target all enemies
-        return defenderParty;
-    } else if (attackType.includes('Heal')) {
-        // Filter allies based on HP thresholds (25% for Solo, 50% for Spread)
-        const hpThreshold = attackType === 'Heal Solo' ? 0.25 : 0.5;
-        return attacker.isPlayer
-            ? playerParty.filter(char => char.battleStats.hp <= hpThreshold * char.battleStats.maxHp)
-            : enemyParty.filter(char => char.battleStats.hp <= hpThreshold * char.battleStats.maxHp);
+      // Target all enemies
+      return defenderParty;
     }
-}
+  }
+  
 
-
-function calculateDamage(attacker, defender, attackType, defenderParty) {
+function calculateDamage(attacker, defender, attackType, defenderParty, playerParty, enemyParty) {
     const isCrit = Math.random() < attacker.battleStats.critC / defender.battleStats.critR / 16;
     const critModifier = isCrit ? 2 : 1;
     const damageModifier = 2; // From the document
     const attackStat = attacker.class === 'Mage' ? attacker.battleStats.mAtk : attacker.battleStats.pAtk;
     const defenseStat = attacker.class === 'Mage' ? defender.battleStats.mDef : defender.battleStats.pDef;
-    const numTargets = attackType.includes('Spread') ? selectTargets(attacker, attackType, defenderParty).length : 1;
+    const numTargets = attackType.includes('Spread') ? selectTargets(attacker, attackType, defenderParty, playerParty, enemyParty).length : 1;
 
     const damage = Math.round(((attackStat * damageModifier * critModifier * (1 / numTargets)) / defenseStat) * attackStat);
     return damage;
@@ -163,12 +191,13 @@ function determineWinner(playerParty, enemyParty) {
 }
 
 function allCharactersDefeated(party) {
-    return party.every(char => char.hp <= 0);
+    return party.every(char => char.battleStats.hp <= 0);
 }
 
 
 function isBattleOver(playerParty, enemyParty) {
-    return allCharactersDefeated(playerParty) || allCharactersDefeated(enemyParty);
+    return playerParty.every(char => char.battleStats.hp <= 0) ||
+        enemyParty.every(char => char.battleStats.hp <= 0);
 }
 
 module.exports = {

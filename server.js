@@ -1,15 +1,12 @@
 const express = require("express");
 const app = express();
 const connectDB = require("./config/db");
-const path = require("path");
 const characterRoutes = require("./routes/api/character.api");
 const battleRoutes = require("./routes/api/battle.api");
 
 
 //middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
-
 
 
 //connect to database
